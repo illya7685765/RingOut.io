@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>RingOut.io</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="menu">
+    <div class="menu-glow menu-glow--tl"></div>
+    <div class="menu-glow menu-glow--br"></div>
+
+    <div class="logo">
+      <span class="logo-ring">Ring</span><span class="logo-out">Out</span><b class="logo-io">.io</b>
+    </div>
+
+    <div class="menu-side menu-side--right">
+      <div class="live-label">
+        <span class="live-dot"></span>
+        LIVE ARENA
+      </div>
+
+      <div id="questPanel" class="quest-panel">
+        <div class="stats-title">DAILY QUESTS</div>
+        <div class="quest-item"><span>Collect 50 food</span><b id="questFood">0/50</b></div>
+        <div class="quest-item"><span>Knock out 3 players</span><b id="questKills">0/3</b></div>
+        <div class="quest-item"><span>Survive 2 events</span><b id="questEvents">0/2</b></div>
+      </div>
+    </div>
+
+    <button type="button" id="menuExtrasBtn" class="menu-extras-btn" aria-expanded="false">Stats / Quests</button>
+
+    <div class="center-box">
+      <input id="name" placeholder="Enter your callsign" maxlength="14" />
+
+      <div class="server-select">
+        <button class="server-btn selected" data-server="EU-1">EU-1 <span>0</span></button>
+        <button class="server-btn" data-server="EU-2">EU-2 <span>0</span></button>
+        <button class="server-btn" data-server="EU-3">EU-3 <span>0</span></button>
+      </div>
+
+      <p class="menu-tip">Knock foes out of the ring · collect orbs to grow · dash to slam</p>
+      <p id="menuStatus" class="menu-status">Connecting to arena…</p>
+      <button class="play-btn" id="playBtn" onclick="joinGame()">ENTER RING</button>
+      <button type="button" class="invite-btn" id="inviteBtn">INVITE FRIEND</button>
+    </div>
+
+    <div id="inviteModal" class="invite-modal" aria-hidden="true">
+      <div class="invite-modal__backdrop" id="inviteModalBackdrop"></div>
+      <div class="invite-modal__panel" role="dialog" aria-labelledby="inviteModalTitle">
+        <h2 id="inviteModalTitle" class="invite-modal__title">Invite a Friend</h2>
+        <p id="inviteUrl" class="invite-modal__url"></p>
+        <button type="button" class="invite-modal__copy" id="inviteCopyBtn">COPY LINK</button>
+        <button type="button" class="invite-modal__close" id="inviteCloseBtn">CLOSE</button>
+      </div>
+    </div>
+
+    <div id="toastStack" class="toast-stack" aria-live="polite"></div>
+
+    <div id="statsPanel" class="stats-panel menu-side menu-side--left">
+      <div class="stats-title">CAREER STATS</div>
+      <div class="stats-grid">
+        <div class="stat-item"><span class="stat-label">Kills</span><b id="statKills">0</b></div>
+        <div class="stat-item"><span class="stat-label">Best Mass</span><b id="statMass">0</b></div>
+        <div class="stat-item"><span class="stat-label">Top Level</span><b id="statLevel">1</b></div>
+        <div class="stat-item"><span class="stat-label">Games</span><b id="statGames">0</b></div>
+        <div class="stat-item stat-item--full"><span class="stat-label">Invited Players</span><b id="statInvited">0</b></div>
+        <div class="stat-item"><span class="stat-label">Bonus XP</span><b id="statBonusXp">0</b></div>
+        <div class="stat-item stat-item--full">
+          <span class="stat-label">Reward Progress</span>
+          <div id="inviteRewardProgress" class="invite-reward-progress">
+            <span class="invite-milestone" data-tier="1">1</span>
+            <span class="invite-milestone" data-tier="3">3</span>
+            <span class="invite-milestone" data-tier="5">5</span>
+            <span class="invite-milestone" data-tier="10">10</span>
+          </div>
+        </div>
+        <div class="stat-item stat-item--full" id="founderTitleRow" hidden>
+          <span class="stat-label">Title</span>
+          <b id="statFounderTitle" class="founder-title">Legend Founder</b>
+        </div>
+      </div>
+    </div>
+
+    <button class="corner-btn left" onclick="openSkinMenu()">
+      <div class="skin-preview"></div>
+      <span>CUSTOMIZE</span>
+    </button>
+  </div>
+
+  <div id="skinMenu">
+    <div class="skin-menu-header">CUSTOMIZE</div>
+    <button class="arrow left-arrow" onclick="prevSkin()">◀</button>
+
+    <div class="skin-stage">
+      <div id="bigSkinBall"></div>
+      <div id="skinName" class="skin-name">GREEN</div>
+      <div id="skinLock" class="skin-lock"></div>
+      <button class="save-btn" id="skinSaveBtn" onclick="closeSkinMenu()">SAVE</button>
+    </div>
+
+    <button class="arrow right-arrow" onclick="nextSkin()">▶</button>
+  </div>
+
+  <div id="rotateOverlay">
+    <div class="rotate-card">
+      <div class="rotate-icon">📱↔️</div>
+      <b>Поверни телефон</b>
+      <span>Грай горизонтально — так джойстик і кнопка DASH не закривають екран.</span>
+    </div>
+  </div>
+
+  <div id="hud">
+    <div class="hud-badge">
+      <span class="hud-label">RING</span>
+      <b id="roomText"></b>
+    </div>
+    <div id="hudXp" class="hud-xp">LV 1 · Bronze · 0 XP</div>
+    <div id="hudQuests" class="hud-quests"></div>
+    <span class="hud-hint">WASD — move · SPACE — dash</span>
+  </div>
+
+  <div id="streakBanner" class="streak-banner hidden"></div>
+
+  <div id="mobileControls">
+    <div id="joystickBase">
+      <div id="joystickStick"></div>
+    </div>
+    <button id="dashBtn">DASH</button>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
