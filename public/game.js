@@ -24,6 +24,10 @@ let lastKillFeedSig = "";
 let eventPulse = 0;
 let menuConnected = false;
 
+let predictedPos = { x: 0, y: 0, vx: 0, vy: 0 };
+let lastServerPos = { x: 0, y: 0 };
+let playerInterpolation = new Map();
+
 const skinList = ["green", "fire", "ice", "toxic", "shadow", "gold", "neon"];
 const skinUnlockKills = { green: 0, fire: 3, ice: 7, toxic: 12, shadow: 20, gold: 35, neon: 9999 };
 const skinLabels = {
@@ -616,11 +620,43 @@ function showStreakBanner(text) {
 }
 
 socket.on("state", s => {
-  state = s;
+  const normalizedState = {
+    players: s.p.map(p => ({
+      id: p.i,
+      name: p.n,
+      skin: p.s,
+      x: p.x,
+      y: p.y,
+      r: p.r,
+      mass: p.m,
+      kills: p.k,
+      alive: p.a,
+      level: p.l,
+      rank: p.rk,
+      xp: p.xp,
+      dangerTimeLeft: p.d,
+      streakBanner: p.sb,
+      streakBannerUntil: p.sbu
+    })),
+    foods: s.f,
+    arena: s.ar,
+    arenaRadius: s.arr,
+    killFeed: s.kf,
+    event: s.ev,
+    eventMessage: s.em,
+    eventTimer: s.et,
+    megaWarning: s.mw,
+    meteors: s.met,
+    hitEffects: s.he,
+    online: s.on,
+    servers: s.srv
+  };
+
+  state = normalizedState;
   eventPulse += 0.08;
 
-  if (s.hitEffects && s.hitEffects.length) {
-    for (const hit of s.hitEffects) {
+  if (s.he && s.he.length) {
+    for (const hit of s.he) {
       const power = hit.power || 4;
       makeShockwave(hit.x, hit.y, power);
       if (hit.victimId === myId) {
@@ -633,7 +669,7 @@ socket.on("state", s => {
 
   if (screenShake > 0) screenShake *= 0.82;
 
-  syncKillFeedTimes(s.killFeed);
+  syncKillFeedTimes(s.kf);
   updateServerButtons();
   updateMenuStatusFromState();
   trackEventSurvival();
@@ -662,6 +698,20 @@ socket.on("state", s => {
       screenShake = 16;
     }
     lastAlive = me.alive;
+
+    lastServerPos = { x: me.x, y: me.y };
+    predictedPos = { x: me.x, y: me.y, vx: 0, vy: 0 };
+  }
+
+  for (const p of state.players) {
+    if (p.id === myId) continue;
+    const interp = playerInterpolation.get(p.id) || { prevX: p.x, prevY: p.y, targetX: p.x, targetY: p.y, t: 1 };
+    interp.prevX = interp.targetX;
+    interp.prevY = interp.targetY;
+    interp.targetX = p.x;
+    interp.targetY = p.y;
+    interp.t = 0;
+    playerInterpolation.set(p.id, interp);
   }
 });
 
@@ -760,9 +810,46 @@ addEventListener("keyup", e => {
   if (e.code === "Space") keys.dash = false;
 });
 
+const INPUT_RATE = 15;
 setInterval(() => {
-  if (joined) socket.emit("input", keys);
-}, 1000 / 60);
+  if (joined) {
+    socket.emit("input", keys);
+    updateClientPrediction();
+  }
+}, 1000 / INPUT_RATE);
+
+function updateClientPrediction() {
+  if (!state) return;
+  const me = state.players.find(p => p.id === myId);
+  if (!me || !me.alive) return;
+
+  let speed = Math.max(0.2, 5.2 - me.mass * 0.015);
+  let ax = 0;
+  let ay = 0;
+
+  if (keys.up) ay -= 1;
+  if (keys.down) ay += 1;
+  if (keys.left) ax -= 1;
+  if (keys.right) ax += 1;
+
+  const len = Math.hypot(ax, ay);
+  if (len > 0) {
+    ax /= len;
+    ay /= len;
+    predictedPos.vx += ax * speed * 0.22;
+    predictedPos.vy += ay * speed * 0.22;
+  }
+
+  if (keys.dash && len > 0) {
+    predictedPos.vx += ax * 16;
+    predictedPos.vy += ay * 16;
+  }
+
+  predictedPos.vx *= 0.93;
+  predictedPos.vy *= 0.93;
+  predictedPos.x += predictedPos.vx;
+  predictedPos.y += predictedPos.vy;
+}
 
 function makeExplosion(x, y) {
   for (let i = 0; i < 55; i++) {
@@ -1548,6 +1635,7 @@ function draw() {
   requestAnimationFrame(draw);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+  updateInterpolation();
   drawWorld();
 
   if (joined) {
@@ -1559,6 +1647,39 @@ function draw() {
     drawStreakBanner();
     drawRespawn();
     drawDangerOverlay();
+  }
+}
+
+function updateInterpolation() {
+  if (!state) return;
+
+  for (const p of state.players) {
+    if (p.id === myId) continue;
+    const interp = playerInterpolation.get(p.id);
+    if (interp) {
+      interp.t = Math.min(1, interp.t + 0.08);
+      p.x = interp.prevX + (interp.targetX - interp.prevX) * interp.t;
+      p.y = interp.prevY + (interp.targetY - interp.prevY) * interp.t;
+      playerInterpolation.set(p.id, interp);
+    }
+  }
+
+  const me = state.players.find(p => p.id === myId);
+  if (me && me.alive) {
+    const dx = lastServerPos.x - predictedPos.x;
+    const dy = lastServerPos.y - predictedPos.y;
+    const dist = Math.hypot(dx, dy);
+    
+    if (dist > 50) {
+      predictedPos.x = lastServerPos.x;
+      predictedPos.y = lastServerPos.y;
+    } else if (dist > 5) {
+      predictedPos.x += dx * 0.1;
+      predictedPos.y += dy * 0.1;
+    }
+    
+    me.x = predictedPos.x;
+    me.y = predictedPos.y;
   }
 }
 

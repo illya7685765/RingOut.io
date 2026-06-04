@@ -634,33 +634,49 @@ function publicState(room) {
   const hitEffects = room.hitEffects;
   room.hitEffects = [];
 
+  const players = Object.values(room.players).map(p => ({
+    i: p.id,
+    n: p.name,
+    s: p.skin,
+    x: p.x,
+    y: p.y,
+    r: p.r,
+    m: p.mass,
+    k: p.kills,
+    a: p.alive,
+    l: p.level,
+    rk: p.rank,
+    xp: p.xp,
+    d: p.dangerTimeLeft,
+    sb: p.streakBanner,
+    sbu: p.streakBannerUntil || 0
+  }));
+
   return {
-    players: Object.values(room.players).map(p => ({
-      ...p,
-      streakBannerUntil: p.streakBannerUntil || 0
-    })),
-    foods: room.foods,
-    arena: ARENA,
-    arenaRadius: getEffectiveArena(room),
-    killFeed: room.killFeed,
-    event: room.event,
-    eventMessage: room.eventMessage,
-    eventTimer: Math.max(0, room.nextEventAt - Date.now()),
-    megaWarning: room.megaWarning,
-    meteors: room.meteors,
-    hitEffects,
-    online: Object.keys(room.players).length,
-    servers: getServersInfo()
+    p: players,
+    f: room.foods,
+    ar: ARENA,
+    arr: getEffectiveArena(room),
+    kf: room.killFeed,
+    ev: room.event,
+    em: room.eventMessage,
+    et: Math.max(0, room.nextEventAt - Date.now()),
+    mw: room.megaWarning,
+    met: room.meteors,
+    he: hitEffects,
+    on: Object.keys(room.players).length,
+    srv: getServersInfo()
   };
 }
 
+const TICK_RATE = 15;
 setInterval(() => {
   for (const code of allowedServers) {
     const room = ensureRoom(code);
     updateRoom(room);
     io.to(code).emit("state", publicState(room));
   }
-}, 1000 / 60);
+}, 1000 / TICK_RATE);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
