@@ -4,10 +4,10 @@ const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
+
+// 👇 ОЦЕ МІСЦЕ
 const io = new Server(server, {
-  transports: ["websocket"],
-  pingInterval: 25000,
-  pingTimeout: 5000
+  transports: ["websocket", "polling"]
 });
 
 app.use(express.json());
