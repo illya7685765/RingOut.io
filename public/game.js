@@ -5,6 +5,7 @@ const socket = io({
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
+// State management with Maps for O(1) lookups
 let state = null;
 let myId = null;
 let joined = false;
@@ -27,6 +28,13 @@ let predictedPos = { x: 0, y: 0, vx: 0, vy: 0 };
 let serverSnapshots = [];
 let playerStates = new Map();
 let interpolationDelay = 100;
+
+// Optimized data structures
+let playersMap = new Map(); // Replace array.find() with Map
+let foodsMap = new Map(); // Food lookup optimization
+let leaderboardCache = null;
+let leaderboardCacheTime = 0;
+const LEADERBOARD_CACHE_DURATION = 500; // Cache for 500ms
 
 const skinList = ["green", "fire", "ice", "toxic", "shadow", "gold", "neon"];
 const skinUnlockKills = { green: 0, fire: 3, ice: 7, toxic: 12, shadow: 20, gold: 35, neon: 9999 };
@@ -71,6 +79,7 @@ const STORAGE_KEYS = {
   playerId: "ringout_player_id",
   pendingRef: "ringout_pending_ref",
   inviteRewards: "ringout_invite_rewards",
+  achievements: "ringout_achievements",
 };
 
 let inviteCount = 0;
@@ -140,6 +149,107 @@ function loadInviteRewards() {
   } catch {
     return { claimedTiers: [], bonusXp: 0, neonSkin: false, founderTitle: false };
   }
+}
+
+function loadAchievements() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEYS.achievements)) || {
+      firstKill: false,
+      mass100: false,
+      mass500: false,
+      mass1000: false,
+      kills10: false,
+      kills50: false,
+      kills100: false,
+      survivor: false,
+      splitter: false,
+      ejector: false
+    };
+  } catch {
+    return {
+      firstKill: false,
+      mass100: false,
+      mass500: false,
+      mass1000: false,
+      kills10: false,
+      kills50: false,
+      kills100: false,
+      survivor: false,
+      splitter: false,
+      ejector: false
+    };
+  }
+}
+
+function saveAchievements(achievements) {
+  localStorage.setItem(STORAGE_KEYS.achievements, JSON.stringify(achievements));
+}
+
+let achievements = loadAchievements();
+
+const ACHIEVEMENT_DEFINITIONS = {
+  firstKill: { name: "First Blood", description: "Get your first kill", icon: "🩸" },
+  mass100: { name: "Growing Strong", description: "Reach 100 mass", icon: "💪" },
+  mass500: { name: "Massive", description: "Reach 500 mass", icon: "🏋️" },
+  mass1000: { name: "Titan", description: "Reach 1000 mass", icon: "🗿" },
+  kills10: { name: "Hunter", description: "Get 10 total kills", icon: "🎯" },
+  kills50: { name: "Slayer", description: "Get 50 total kills", icon: "⚔️" },
+  kills100: { name: "Legend", description: "Get 100 total kills", icon: "👑" },
+  survivor: { name: "Survivor", description: "Survive for 5 minutes", icon: "🛡️" },
+  splitter: { name: "Divide and Conquer", description: "Use split ability", icon: "✂️" },
+  ejector: { name: "Generous", description: "Eject mass 10 times", icon: "🎁" }
+};
+
+function checkAchievements(stats) {
+  let newUnlock = false;
+  
+  if (!achievements.firstKill && stats.totalKills >= 1) {
+    achievements.firstKill = true;
+    showToast(`🩸 Achievement Unlocked: First Blood!`);
+    newUnlock = true;
+  }
+  
+  if (!achievements.mass100 && stats.bestMass >= 100) {
+    achievements.mass100 = true;
+    showToast(`💪 Achievement Unlocked: Growing Strong!`);
+    newUnlock = true;
+  }
+  
+  if (!achievements.mass500 && stats.bestMass >= 500) {
+    achievements.mass500 = true;
+    showToast(`🏋️ Achievement Unlocked: Massive!`);
+    newUnlock = true;
+  }
+  
+  if (!achievements.mass1000 && stats.bestMass >= 1000) {
+    achievements.mass1000 = true;
+    showToast(`🗿 Achievement Unlocked: Titan!`);
+    newUnlock = true;
+  }
+  
+  if (!achievements.kills10 && stats.totalKills >= 10) {
+    achievements.kills10 = true;
+    showToast(`🎯 Achievement Unlocked: Hunter!`);
+    newUnlock = true;
+  }
+  
+  if (!achievements.kills50 && stats.totalKills >= 50) {
+    achievements.kills50 = true;
+    showToast(`⚔️ Achievement Unlocked: Slayer!`);
+    newUnlock = true;
+  }
+  
+  if (!achievements.kills100 && stats.totalKills >= 100) {
+    achievements.kills100 = true;
+    showToast(`👑 Achievement Unlocked: Legend!`);
+    newUnlock = true;
+  }
+  
+  if (newUnlock) {
+    saveAchievements(achievements);
+  }
+  
+  return achievements;
 }
 
 function saveInviteRewards() {
@@ -390,11 +500,17 @@ function trackMeProgress(me) {
     dailyQuests.kills = Math.min(3, dailyQuests.kills + killDelta);
     saveStats(playerStats);
     saveQuests(dailyQuests);
+    
+    // Check achievements
+    checkAchievements(playerStats);
   }
 
   if (me.mass > playerStats.bestMass) {
     playerStats.bestMass = me.mass;
     saveStats(playerStats);
+    
+    // Check achievements
+    checkAchievements(playerStats);
   }
 
   if ((me.level || 1) > playerStats.highestLevel) {
@@ -608,50 +724,55 @@ socket.on("s", (snapshot) => {
     state = {
       players: [],
       foods: snapshot.f,
-      arena: snapshot.ar || 1000,
-      arenaRadius: snapshot.ar || 1000
+      arena: snapshot.ar || 3000,
+      arenaRadius: snapshot.ar || 3000,
+      killFeed: snapshot.k || []
     };
+    // Initialize maps
+    playersMap.clear();
+    foodsMap.clear();
   } else {
     state.foods = snapshot.f;
-    state.arena = snapshot.ar || 1000;
-    state.arenaRadius = snapshot.ar || 1000;
+    state.arena = snapshot.ar || 3000;
+    state.arenaRadius = snapshot.ar || 3000;
+    if (snapshot.k) state.killFeed = snapshot.k;
   }
 
+  // Process deltas with Map lookups
   for (const delta of snapshot.d) {
     if (delta.a === 0) {
+      // Player died/left
+      playersMap.delete(delta.i);
       state.players = state.players.filter(p => p.id !== delta.i);
       playerStates.delete(delta.i);
     } else {
-      let player = state.players.find(p => p.id === delta.i);
+      let player = playersMap.get(delta.i);
       if (!player) {
         player = {
           id: delta.i,
-          name: "Player",
-          skin: "green",
+          name: delta.n || "Player",
+          skin: delta.s || "green",
           x: delta.x,
           y: delta.y,
           r: delta.r,
           mass: delta.m,
           alive: true,
-          kills: 0,
-          level: 1,
-          rank: "Bronze",
-          xp: 0,
-          dangerTimeLeft: 0,
-          streakBanner: null,
-          streakBannerUntil: 0
+          kills: delta.k || 0,
+          level: delta.l || 1,
+          xp: delta.xp || 0
         };
         state.players.push(player);
+        playersMap.set(delta.i, player);
       }
 
       playerStates.set(delta.i, {
         prevX: player.x,
         prevY: player.y,
+        prevR: player.r,
         targetX: delta.x,
         targetY: delta.y,
         targetR: delta.r,
         targetM: delta.m,
-        t: 0,
         timestamp: snapshot.t
       });
 
@@ -659,10 +780,23 @@ socket.on("s", (snapshot) => {
       player.y = delta.y;
       player.r = delta.r;
       player.mass = delta.m;
+      if (delta.k !== undefined) player.kills = delta.k;
+      if (delta.l !== undefined) player.level = delta.l;
+      if (delta.xp !== undefined) player.xp = delta.xp;
     }
   }
 
-  const me = state.players.find(p => p.id === myId);
+  // Update food map
+  foodsMap.clear();
+  for (const food of state.foods) {
+    foodsMap.set(food.id, food);
+  }
+
+  // Invalidate leaderboard cache
+  leaderboardCache = null;
+  leaderboardCacheTime = 0;
+
+  const me = playersMap.get(myId);
   if (me) {
     const myState = playerStates.get(myId);
     if (myState) {
@@ -692,6 +826,26 @@ addEventListener("keydown", e => {
   if (e.code === "KeyA") keys.left = true;
   if (e.code === "KeyD") keys.right = true;
   if (e.code === "Space") keys.dash = true;
+  
+  // Split mechanic (Q key)
+  if (e.code === "KeyQ" && joined) {
+    const me = playersMap.get(myId);
+    if (me && me.alive) {
+      const directionX = keys.right ? 1 : keys.left ? -1 : 1;
+      const directionY = keys.down ? 1 : keys.up ? -1 : 0;
+      socket.emit("split", { directionX, directionY });
+    }
+  }
+  
+  // Eject mass (E key)
+  if (e.code === "KeyE" && joined) {
+    const me = playersMap.get(myId);
+    if (me && me.alive) {
+      const directionX = keys.right ? 1 : keys.left ? -1 : 1;
+      const directionY = keys.down ? 1 : keys.up ? -1 : 0;
+      socket.emit("eject", { directionX, directionY });
+    }
+  }
 });
 
 addEventListener("keyup", e => {
@@ -716,10 +870,11 @@ setInterval(() => {
 
 function updateClientPrediction() {
   if (!state) return;
-  const me = state.players.find(p => p.id === myId);
+  const me = playersMap.get(myId);
   if (!me || !me.alive) return;
 
-  let speed = Math.max(0.2, 5.2 - me.mass * 0.015);
+  // Agar.io style speed scaling
+  let speed = Math.max(1, 5 * Math.pow(me.mass, -0.02));
   let ax = 0;
   let ay = 0;
 
@@ -733,8 +888,8 @@ function updateClientPrediction() {
     const len = Math.sqrt(lenSq);
     ax /= len;
     ay /= len;
-    predictedPos.vx += ax * speed * 0.22;
-    predictedPos.vy += ay * speed * 0.22;
+    predictedPos.vx += ax * speed * 0.3;
+    predictedPos.vy += ay * speed * 0.3;
   }
 
   if (keys.dash && lenSq > 0) {
@@ -742,8 +897,8 @@ function updateClientPrediction() {
     predictedPos.vy += ay * 16;
   }
 
-  predictedPos.vx *= 0.93;
-  predictedPos.vy *= 0.93;
+  predictedPos.vx *= 0.95;
+  predictedPos.vy *= 0.95;
   predictedPos.x += predictedPos.vx;
   predictedPos.y += predictedPos.vy;
 
@@ -861,24 +1016,62 @@ function drawGrid() {
 
 function topPlayerId() {
   if (!state) return null;
-  const alive = state.players.filter(p => p.alive);
-  alive.sort((a, b) => b.mass - a.mass || b.kills - a.kills);
-  return alive[0]?.id || null;
+  let topId = null;
+  let topMass = -1;
+  
+  for (const player of state.players) {
+    if (player.alive && player.mass > topMass) {
+      topMass = player.mass;
+      topId = player.id;
+    }
+  }
+  
+  return topId;
+}
+
+// Viewport culling helper
+function isInViewport(x, y, radius, camX, camY, viewportWidth, viewportHeight) {
+  const screenX = x - camX + canvas.width / 2;
+  const screenY = y - camY + canvas.height / 2;
+  const margin = radius + 50;
+  
+  return screenX > -margin && 
+         screenX < viewportWidth + margin &&
+         screenY > -margin && 
+         screenY < viewportHeight + margin;
 }
 
 function drawFood() {
   if (!state || !state.foods) return;
 
+  // Batch food rendering by color for performance
+  const foodBatches = new Map();
+  
   for (const f of state.foods) {
-    ctx.beginPath();
-    ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
-    const g = ctx.createRadialGradient(f.x - 2, f.y - 2, 1, f.x, f.y, f.r);
-    g.addColorStop(0, "#e0f2fe");
-    g.addColorStop(1, UI.purple);
-    ctx.fillStyle = g;
-    ctx.shadowColor = UI.purple;
-    ctx.shadowBlur = 10;
-    ctx.fill();
+    // Viewport culling
+    if (!isInViewport(f.x, f.y, f.r, camX, camY, canvas.width, canvas.height)) {
+      continue;
+    }
+    
+    const color = f.c || UI.purple;
+    if (!foodBatches.has(color)) {
+      foodBatches.set(color, []);
+    }
+    foodBatches.get(color).push(f);
+  }
+  
+  // Draw each batch
+  for (const [color, foods] of foodBatches) {
+    ctx.fillStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 8;
+    
+    for (const f of foods) {
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    
     ctx.shadowBlur = 0;
   }
 }
@@ -959,21 +1152,31 @@ function drawWorld() {
   let targetY = 0;
 
   if (joined) {
-    const me = state.players.find(p => p.id === myId);
+    const me = playersMap.get(myId);
     if (me) {
       targetX = me.x;
       targetY = me.y;
     }
   } else {
-    const top = [...state.players].sort((a, b) => b.mass - a.mass)[0];
-    if (top) {
-      targetX = top.x;
-      targetY = top.y;
+    // Find top player without sorting
+    let topPlayer = null;
+    let topMass = -1;
+    for (const p of state.players) {
+      if (p.alive && p.mass > topMass) {
+        topMass = p.mass;
+        topPlayer = p;
+      }
+    }
+    if (topPlayer) {
+      targetX = topPlayer.x;
+      targetY = topPlayer.y;
     }
   }
 
-  camX += (targetX - camX) * .04;
-  camY += (targetY - camY) * .04;
+  // Improved camera smoothing
+  const smoothFactor = 0.08;
+  camX += (targetX - camX) * smoothFactor;
+  camY += (targetY - camY) * smoothFactor;
 
   const shake = screenShake > 0.3
     ? (Math.random() - 0.5) * screenShake * 2
@@ -1007,8 +1210,11 @@ function drawWorld() {
 
   drawFood();
 
+  // Viewport culling for players
   for (const p of state.players) {
-    if (p.alive) drawPlayer(p);
+    if (p.alive && isInViewport(p.x, p.y, p.r, camX, camY, canvas.width, canvas.height)) {
+      drawPlayer(p);
+    }
   }
 
   drawParticles();
@@ -1067,7 +1273,15 @@ function drawMenuSpectateHint() {
 function drawLeaderboard() {
   if (!state) return;
 
-  const players = [...state.players].sort((a, b) => b.mass - a.mass);
+  // Use cached leaderboard if available
+  const now = Date.now();
+  if (!leaderboardCache || now - leaderboardCacheTime > LEADERBOARD_CACHE_DURATION) {
+    // Sort and cache leaderboard
+    leaderboardCache = [...state.players].sort((a, b) => b.mass - a.mass);
+    leaderboardCacheTime = now;
+  }
+
+  const players = leaderboardCache;
   const mobile = isTouchDevice();
 
   const pad = 14;
@@ -1131,7 +1345,7 @@ function drawLeaderboard() {
 
 
 function drawDashBar() {
-  const me = state && state.players.find(p => p.id === myId);
+  const me = playersMap.get(myId);
   if (!me || !me.alive) return;
 
   const mobile = isTouchDevice();
@@ -1139,7 +1353,7 @@ function drawDashBar() {
   const h = mobile ? 12 : 18;
   const x = canvas.width / 2 - w / 2;
   const y = mobile ? 12 : canvas.height - 48;
-  const ready = 1 - Math.min(me.dashCooldown / 72, 1);
+  const ready = 1 - Math.min((me.dashCooldown || 0) / 30, 1);
 
   drawPanel(x, y, w, h, 8);
 
@@ -1157,7 +1371,7 @@ function drawDashBar() {
 }
 
 function drawRespawn() {
-  const me = state && state.players.find(p => p.id === myId);
+  const me = playersMap.get(myId);
   if (!me || me.alive) return;
 
   const mobile = isTouchDevice();
@@ -1209,6 +1423,7 @@ function updateInterpolation() {
   const now = Date.now();
   const renderTime = now - interpolationDelay;
 
+  // Interpolate other players
   for (const p of state.players) {
     if (p.id === myId) continue;
 
@@ -1222,7 +1437,8 @@ function updateInterpolation() {
     }
   }
 
-  const me = state.players.find(p => p.id === myId);
+  // Client-side prediction correction for local player
+  const me = playersMap.get(myId);
   if (me && me.alive) {
     const meState = playerStates.get(myId);
     if (meState) {
@@ -1230,12 +1446,13 @@ function updateInterpolation() {
       const dy = meState.targetY - predictedPos.y;
       const distSq = dx * dx + dy * dy;
 
+      // Snap if too far, smooth correction if close
       if (distSq > 2500) {
         predictedPos.x = meState.targetX;
         predictedPos.y = meState.targetY;
       } else if (distSq > 25) {
-        predictedPos.x += dx * 0.1;
-        predictedPos.y += dy * 0.1;
+        predictedPos.x += dx * 0.15;
+        predictedPos.y += dy * 0.15;
       }
 
       me.x = predictedPos.x;
