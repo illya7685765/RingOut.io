@@ -206,7 +206,8 @@ class SocketHandler {
         const socket = this.io.sockets.sockets.get(socketId);
         if (!socket || !socket.data.inputBuffer.length) continue;
         
-        // Process buffered inputs
+        // Process buffered inputs - apply each input once
+        // The room's update() will handle the actual movement with dt
         for (const inputData of socket.data.inputBuffer) {
           player.applyInput(inputData.input);
           

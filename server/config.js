@@ -34,8 +34,8 @@ module.exports = {
   
   // Network
   SNAPSHOT_RATE: 30,
-  INTEREST_RADIUS: 1500,
-  DELTA_THRESHOLD: 0.5,
+  INTEREST_RADIUS: 2000,
+  DELTA_THRESHOLD: 2.0,
   
   // Rate limiting
   MAX_INPUTS_PER_SECOND: 30,

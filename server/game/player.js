@@ -92,13 +92,13 @@ class Player {
       this.vy += ay * speed * 0.3;
     }
 
-    // Dash
-    if (input.dash && this.dashCooldown <= 0) {
+    // Dash - only if moving and cooldown ready
+    if (input.dash && this.dashCooldown <= 0 && lenSq > 0) {
       const len = Math.sqrt(lenSq);
       if (len > 0) {
         this.vx += (ax / len) * 16;
         this.vy += (ay / len) * 16;
-        this.dashCooldown = 30;
+        this.dashCooldown = 30; // 1 second at 30 ticks
       }
     }
   }

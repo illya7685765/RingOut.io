@@ -28,6 +28,7 @@ let predictedPos = { x: 0, y: 0, vx: 0, vy: 0 };
 let serverSnapshots = [];
 let playerStates = new Map();
 let interpolationDelay = 100;
+let localDashCooldown = 0;
 
 // Optimized data structures
 let playersMap = new Map(); // Replace array.find() with Map
@@ -786,10 +787,17 @@ socket.on("s", (snapshot) => {
     }
   }
 
-  // Update food map
-  foodsMap.clear();
+  // Update food map - only add/update, don't clear to prevent flickering
   for (const food of state.foods) {
     foodsMap.set(food.id, food);
+  }
+  
+  // Remove foods that are no longer in the snapshot
+  const foodIds = new Set(state.foods.map(f => f.id));
+  for (const [id] of foodsMap) {
+    if (!foodIds.has(id)) {
+      foodsMap.delete(id);
+    }
   }
 
   // Invalidate leaderboard cache
@@ -800,10 +808,24 @@ socket.on("s", (snapshot) => {
   if (me) {
     const myState = playerStates.get(myId);
     if (myState) {
-      predictedPos.x = myState.targetX;
-      predictedPos.y = myState.targetY;
-      predictedPos.vx = 0;
-      predictedPos.vy = 0;
+      // Only reset prediction if significantly off (server reconciliation)
+      const dx = myState.targetX - predictedPos.x;
+      const dy = myState.targetY - predictedPos.y;
+      const distSq = dx * dx + dy * dy;
+      
+      // Only hard reset if very far off (more than 300 units)
+      if (distSq > 90000) {
+        predictedPos.x = myState.targetX;
+        predictedPos.y = myState.targetY;
+        predictedPos.vx = 0;
+        predictedPos.vy = 0;
+      }
+      // Otherwise, let the interpolation system handle smooth correction
+      
+      // Sync dash cooldown from server
+      if (me.dashCooldown !== undefined) {
+        localDashCooldown = me.dashCooldown / 30; // Convert ticks to seconds
+      }
     }
 
     trackMeProgress(me);
@@ -857,6 +879,7 @@ addEventListener("keyup", e => {
 });
 
 const INPUT_RATE = 30;
+const INPUT_DT = 1 / INPUT_RATE; // Delta time for prediction
 setInterval(() => {
   if (joined) {
     inputSeq++;
@@ -864,17 +887,24 @@ setInterval(() => {
       seq: inputSeq,
       input: keys
     });
-    updateClientPrediction();
+    updateClientPrediction(INPUT_DT);
   }
 }, 1000 / INPUT_RATE);
 
-function updateClientPrediction() {
+function updateClientPrediction(dt) {
   if (!state) return;
   const me = playersMap.get(myId);
   if (!me || !me.alive) return;
 
-  // Agar.io style speed scaling
-  let speed = Math.max(1, 5 * Math.pow(me.mass, -0.02));
+  // Update local dash cooldown
+  if (localDashCooldown > 0) {
+    localDashCooldown -= dt;
+  }
+
+  // Match server speed calculation exactly
+  const BASE_SPEED = 5;
+  const SPEED_DECAY = 0.02;
+  let speed = Math.max(1, BASE_SPEED * Math.pow(me.mass, -SPEED_DECAY));
   let ax = 0;
   let ay = 0;
 
@@ -892,15 +922,19 @@ function updateClientPrediction() {
     predictedPos.vy += ay * speed * 0.3;
   }
 
-  if (keys.dash && lenSq > 0) {
+  // Dash with cooldown check
+  if (keys.dash && lenSq > 0 && localDashCooldown <= 0) {
     predictedPos.vx += ax * 16;
     predictedPos.vy += ay * 16;
+    localDashCooldown = 1; // 1 second cooldown
   }
 
-  predictedPos.vx *= 0.95;
-  predictedPos.vy *= 0.95;
-  predictedPos.x += predictedPos.vx;
-  predictedPos.y += predictedPos.vy;
+  // Match server friction
+  const FRICTION = 0.95;
+  predictedPos.vx *= FRICTION;
+  predictedPos.vy *= FRICTION;
+  predictedPos.x += predictedPos.vx * dt;
+  predictedPos.y += predictedPos.vy * dt;
 
   const meState = playerStates.get(myId);
   if (meState) {
@@ -1033,7 +1067,7 @@ function topPlayerId() {
 function isInViewport(x, y, radius, camX, camY, viewportWidth, viewportHeight) {
   const screenX = x - camX + canvas.width / 2;
   const screenY = y - camY + canvas.height / 2;
-  const margin = radius + 50;
+  const margin = radius + 100; // Increased margin to prevent pop-in
   
   return screenX > -margin && 
          screenX < viewportWidth + margin &&
@@ -1173,8 +1207,8 @@ function drawWorld() {
     }
   }
 
-  // Improved camera smoothing
-  const smoothFactor = 0.08;
+  // Improved camera smoothing - more responsive
+  const smoothFactor = 0.15;
   camX += (targetX - camX) * smoothFactor;
   camY += (targetY - camY) * smoothFactor;
 
@@ -1353,7 +1387,7 @@ function drawDashBar() {
   const h = mobile ? 12 : 18;
   const x = canvas.width / 2 - w / 2;
   const y = mobile ? 12 : canvas.height - 48;
-  const ready = 1 - Math.min((me.dashCooldown || 0) / 30, 1);
+  const ready = 1 - Math.min(localDashCooldown, 1);
 
   drawPanel(x, y, w, h, 8);
 
@@ -1421,18 +1455,26 @@ function updateInterpolation() {
   if (!state) return;
 
   const now = Date.now();
-  const renderTime = now - interpolationDelay;
-
+  
   // Interpolate other players
   for (const p of state.players) {
     if (p.id === myId) continue;
 
     const pState = playerStates.get(p.id);
-    if (pState && pState.timestamp < renderTime) {
-      const alpha = Math.min(1, (renderTime - pState.timestamp) / 100);
-      p.x = pState.prevX + (pState.targetX - pState.prevX) * alpha;
-      p.y = pState.prevY + (pState.targetY - pState.prevY) * alpha;
-      p.r = pState.prevR + (pState.targetR - pState.prevR) * alpha;
+    if (pState) {
+      const age = now - pState.timestamp;
+      // Interpolate if state is recent (within 200ms)
+      if (age < 200) {
+        const alpha = Math.min(1, age / 100);
+        p.x = pState.prevX + (pState.targetX - pState.prevX) * alpha;
+        p.y = pState.prevY + (pState.targetY - pState.prevY) * alpha;
+        p.r = pState.prevR + (pState.targetR - pState.prevR) * alpha;
+      } else {
+        // Use target position if state is old
+        p.x = pState.targetX;
+        p.y = pState.targetY;
+        p.r = pState.targetR;
+      }
       p.mass = pState.targetM;
     }
   }
@@ -1446,13 +1488,19 @@ function updateInterpolation() {
       const dy = meState.targetY - predictedPos.y;
       const distSq = dx * dx + dy * dy;
 
-      // Snap if too far, smooth correction if close
-      if (distSq > 2500) {
-        predictedPos.x = meState.targetX;
-        predictedPos.y = meState.targetY;
-      } else if (distSq > 25) {
-        predictedPos.x += dx * 0.15;
-        predictedPos.y += dy * 0.15;
+      // Only correct if prediction is significantly off (more than 100 units)
+      if (distSq > 10000) {
+        // Snap if very far (more than 200 units)
+        if (distSq > 40000) {
+          predictedPos.x = meState.targetX;
+          predictedPos.y = meState.targetY;
+          predictedPos.vx = 0;
+          predictedPos.vy = 0;
+        } else {
+          // Smooth correction
+          predictedPos.x += dx * 0.3;
+          predictedPos.y += dy * 0.3;
+        }
       }
 
       me.x = predictedPos.x;

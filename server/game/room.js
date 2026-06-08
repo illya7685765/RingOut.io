@@ -85,25 +85,7 @@ class Room {
   update(dt) {
     logger.startTimer('room_update');
     
-    // Clear grids
-    this.playerGrid.clear();
-    this.foodGrid.clear();
-    
-    // Rebuild grids
-    for (const player of this.players.values()) {
-      if (!player.alive) continue;
-      this.playerGrid.insert(player);
-    }
-    
-    for (const food of this.foods.values()) {
-      this.foodGrid.insert(food);
-    }
-    
-    for (const mass of this.ejectedMass.values()) {
-      this.foodGrid.insert(mass);
-    }
-    
-    // Update players
+    // Update players first
     for (const player of this.players.values()) {
       if (!player.alive) continue;
       player.update(dt);
@@ -116,6 +98,23 @@ class Room {
       if (mass.isExpired()) {
         this.ejectedMass.delete(id);
       }
+    }
+    
+    // Rebuild grids only after positions are updated
+    this.playerGrid.clear();
+    this.foodGrid.clear();
+    
+    for (const player of this.players.values()) {
+      if (!player.alive) continue;
+      this.playerGrid.insert(player);
+    }
+    
+    for (const food of this.foods.values()) {
+      this.foodGrid.insert(food);
+    }
+    
+    for (const mass of this.ejectedMass.values()) {
+      this.foodGrid.insert(mass);
     }
     
     // Handle collisions
